@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            .detail_clip{
+                clip-path: inset(50px 200px 50px 75px);
+            }
+            body {
+                background-color: rgb(245, 245, 245);
+                font-family: Arial, Arial, Helvetica, sans-serif;
+            }
+            canvas{
+                border-style: solid;
+                border-width: 1px;
+                width: 800px;
+                height: 450px;
+            }
+            p{
+                margin: 0;
+                font-size: 80%;
+            }
+            div{
+                margin-top: 1px;
+            }
+            img{
+                margin-top: 10px;
+            }
+            .blue_background{
+                background-color: lightblue;
+            }
+            .masking:hover {
+                mask: url("#cursorMask");
+            }
+            .image_dims{
+                width: 1280px;
+                height: 720px;
+            }
+            .preview_size{
+                width: 100px;
+                height: 56px;
+            }
+            .clickable{
+                cursor: pointer;
+            }
+            .zoom_preview_size{
+                width: 100px;
+                height: 100px;
+            }
+            .selections{
+                width: 1000px;
+            }
+            .scenes_grid{
+                display:grid;
+                grid-template-rows: auto;
+                grid-template-columns: repeat(5, auto);
+            }
+            .methods_grid{
+                display:grid;
+                grid-template-rows: auto;
+                grid-template-columns: repeat(9, auto);
+            }
+            .details_grid{
+                display:grid;
+                grid-template-rows: auto;
+                grid-template-columns: repeat(9, auto);
+            }
+        </style>
+        <script>
+            //folder sturcture for images:
+            //dataFolder
+            // +-scene1
+            //   +-method1
+            //     +-0.png
+            //     |-1.png
+            //     |-2.png
+            //     |-...
+            //   +-method2
+            //     +-0.png
+            //     |-1.png
+            //     |-2.png
+            //     |-...
+            //   +-method...
+            // +-scene2
+            //   +-method1
+            //     +-0.png
+            //     |-1.png
+            //     |-2.png
+            //     |-...
+            //   +-method2
+            //     +-0.png
+            //     |-1.png
+            //     |-2.png
+            //     |-...
+            //   +-method...
+            // +-scene...
+
+            //base folder for the images
+            var dataFolder = "/run/media/lachei/Speicher/Master Seminar/result_BMFR_dataset/";
+            //names of all scenes (the folders have to have the same name)
+            var scenes = ["classroom", "living-room", "san-miguel", "sponza", "sponza-glossy"];
+            //dictionary with the name that is shown on the website as indices and the names of the folder containing the corresponding method
+            var methods = { "Reference": "gt", "Noisy": "1spp", "BMFR": "BMFR", "L1BFR": "L1BFR", "L2BFR": "L2BFR", "L12BFR": "L12BFR", "ONND": "ONND", "NBG": "OURS-3-grid", "SVGF": "SVGF"};
+            //frame number of the iamge that should be compared.
+            //the images need to be named {framenumber}.png
+            var comparisonFrame = 45;
+
+            var zoom_lens = new Object;
+            zoom_lens.width = 100;
+            zoom_lens.cx = 1;
+            zoom_lens.cy = 1;
+            zoom_lens.x = 100;
+            zoom_lens.y = 100;
+
+            var canvas = null;
+            //describes offsetx, offsety, scalefactor
+            var canvasImagePositioning = [0, 0, 1];
+            var x = 0, y = 0, dragging = false;
+            //contains all images. Each entry corresponds to a scene and contains a dictionary with the methods and its image
+            var images = [];
+            var curSceneIndex = 0;
+            var curMethod = "Reference";
+            var styleSheet = null;
+            window.onload = ()=>{
+                styleSheet = document.styleSheets[0];
+                //getting the canvas
+                canvas = document.getElementById("MainImage");
+                canvas.width = 1280;
+                canvas.height = 720;
+                canvas.parentNode.addEventListener('mousedown', e => {
+                    dragging = true;
+                    x = e.clientX;
+                    y = e.clientY;
+                });
+                canvas.addEventListener('mousemove', e => {
+                    e.preventDefault();
+
+                    var canvasrect = canvas.getBoundingClientRect();
+                    var pos = new Object();
+                    pos.x = e.pageX - canvasrect.left - window.pageXOffset;
+                    pos.y = e.pageY - canvasrect.top - window.pageYOffset;
+                    pos.x = pos.x / canvasrect.width * 1280;
+                    pos.y = pos.y / canvasrect.height * 720;
+
+                    pos.x = Math.min(pos.x, 1280 - zoom_lens.width);
+                    pos.y = Math.min(pos.y, 720 - zoom_lens.width);
+                    zoom_lens.x = pos.x - zoom_lens.width / 2;
+                    zoom_lens.y = pos.y - zoom_lens.width / 2;
+                    if(dragging){
+                        canvasImagePositioning[0] += e.clientX - x;
+                        canvasImagePositioning[1] += e.clientY - y;
+                        x = e.clientX;
+                        y = e.clientY;
+                    }
+                    updateMainImage(curSceneIndex, curMethod);
+                });
+                window.addEventListener('mouseup', e=>{
+                    dragging = false;
+                });
+                canvas.parentNode.addEventListener('wheel', e=>{
+                    e.preventDefault();
+                    let scale = 1 - (event.deltaY * .02)
+                    let middleX = canvasImagePositioning[0] + canvasImagePositioning[2] * canvas.width / 2;
+                    let middleY = canvasImagePositioning[1] + canvasImagePositioning[2] * canvas.height / 2;
+                    canvasImagePositioning[2] *= scale;
+                    canvasImagePositioning[2] = Math.min(Math.max(.125, canvasImagePositioning[2]), 8);
+                    canvasImagePositioning[0] = middleX - canvasImagePositioning[2] * canvas.width / 2;
+                    canvasImagePositioning[1] = middleY - canvasImagePositioning[2] * canvas.height / 2;
+                    updateMainImage(curSceneIndex, curMethod);
+                });
+
+                //loading all images
+                for(scene of scenes){
+                    var sceneFolder = dataFolder + scene;
+                    var sceneDict = {};
+                    for(method in methods){
+                        var imageSrc = sceneFolder + "/" + methods[method] + "/" + String(comparisonFrame) + ".png";
+                        sceneDict[method] = new Image;
+                        sceneDict[method].src = imageSrc;
+                    }
+                    images.push(sceneDict);
+                }
+
+                //setting the scene selection images
+                var i = 0;
+                for(;i < 5; ++i){
+                    var im = document.getElementById("scene" + String(i));
+                    im.src = images[i]["Reference"].src;
+
+                    im.addEventListener('click', setScene);
+                }
+
+                //setting the method selection images
+                for(method in methods){
+                    var im = document.getElementById("method" + method);
+                    im.src = images[curSceneIndex][method].src;
+
+                    im.addEventListener('click', setMethod);
+                }
+                
+                //setting the detail views
+                for(method in methods){
+                    var im = document.getElementById("detail" + method);
+                    im.style.backgroundImage = "url('" + images[curSceneIndex][method].src + "')";
+                    im.style.backgroundSize = (1280 * zoom_lens.cx) + "px" + (720 * zoom_lens.cy) + "px";
+                }
+
+                //set the standard backgrounds
+                document.getElementById("scene" + String(curSceneIndex)).parentNode.classList.add("blue_background");
+                document.getElementById("method" + curMethod).parentNode.classList.add("blue_background");
+            
+                //draw first image
+                updateMainImage(curSceneIndex, curMethod)
+            }
+
+            function setScene(event){
+                document.getElementById("scene" + String(curSceneIndex)).parentNode.classList.remove("blue_background");
+                curSceneIndex = parseInt(event.target.id.slice(-1));
+                document.getElementById("scene" + String(curSceneIndex)).parentNode.classList.add("blue_background");
+                canvasImagePositioning = [0,0,1];
+                updateMainImage(curSceneIndex, curMethod);
+            }
+
+            function setMethod(event){
+                document.getElementById("method" + curMethod).parentNode.classList.remove("blue_background");
+                curMethod = event.target.id.slice(6);
+                document.getElementById("method" + curMethod).parentNode.classList.add("blue_background");
+                canvasImagePositioning = [0,0,1];
+                updateMainImage(curSceneIndex, curMethod);
+            }
+
+            function updateMainImage(sceneIndex, method){
+                canvas.getContext("2d").clearRect(0,0,canvas.width, canvas.height);
+                canvas.getContext("2d").drawImage(images[sceneIndex][method], canvasImagePositioning[0], canvasImagePositioning[1], canvas.width * canvasImagePositioning[2], canvas.height * canvasImagePositioning[2]);
+                for(method in methods){
+                    var im = document.getElementById("detail" + method);
+                    im.style.backgroundImage = "url('" + images[curSceneIndex][method].src + "')";
+                    im.style.backgroundSize = (1280 * zoom_lens.cx) + "px" + (720 * zoom_lens.cy) + "px";
+                    im.style.backgroundPosition = "-" + (zoom_lens.x * zoom_lens.cx) + "px -" + (zoom_lens.y * zoom_lens.cy) + "px";
+                }
+            }
+        </script>
+    </head>
+    <body>
+        <center>
+            <h1>Image Comparison</h1>
+            <div id="scenesSelection" class = "scenes_grid selections">
+                <div><img id = "scene0" class = "preview_size clickable"><p>classroom    </p></div>
+                <div><img id = "scene1" class = "preview_size clickable"><p>living-room  </p></div>
+                <div><img id = "scene2" class = "preview_size clickable"><p>san-miguel   </p></div>
+                <div><img id = "scene3" class = "preview_size clickable"><p>sponza       </p></div>
+                <div><img id = "scene4" class = "preview_size clickable"><p>sponza-glossy</p></div>
+            </div>
+            <div id = "methodsSeleection" class = "methods_grid selections">
+                <div><img id = "methodReference" class = "preview_size clickable"><p>Reference   </p></div>
+                <div><img id = "methodNoisy"     class = "preview_size clickable"><p>Noisy       </p></div>
+                <div><img id = "methodBMFR"      class = "preview_size clickable"><p>BMFR        </p></div>
+                <div><img id = "methodL1BFR"     class = "preview_size clickable"><p>L1BFR       </p></div>
+                <div><img id = "methodL2BFR"     class = "preview_size clickable"><p>L2BFR       </p></div>
+                <div><img id = "methodL12BFR"    class = "preview_size clickable"><p>L12BFR      </p></div>
+                <div><img id = "methodONND"      class = "preview_size clickable"><p>ONND        </p></div>
+                <div><img id = "methodNBG"       class = "preview_size clickable"><p>NBG         </p></div>
+                <div><img id = "methodSVGF"      class = "preview_size clickable"><p>SVGF        </p></div>
+            </div>
+            <div class = "selections">   
+                <canvas id="MainImage"></canvas>
+            </div>
+            <div id = "detailViews" class = "details_grid selections">
+                <div><div id = "detailReference" class = "zoom_preview_size"></div><div><p>Reference   </p></div></div>
+                <div><div id = "detailNoisy"     class = "zoom_preview_size"></div><div><p>Noisy       </p></div></div>
+                <div><div id = "detailBMFR"      class = "zoom_preview_size"></div><div><p>BMFR        </p></div></div>
+                <div><div id = "detailL1BFR"     class = "zoom_preview_size"></div><div><p>L1BFR       </p></div></div>
+                <div><div id = "detailL2BFR"     class = "zoom_preview_size"></div><div><p>L2BFR       </p></div></div>
+                <div><div id = "detailL12BFR"    class = "zoom_preview_size"></div><div><p>L12BFR      </p></div></div>
+                <div><div id = "detailONND"      class = "zoom_preview_size"></div><div><p>ONND        </p></div></div>
+                <div><div id = "detailNBG"       class = "zoom_preview_size"></div><div><p>NBG         </p></div></div>
+                <div><div id = "detailSVGF"      class = "zoom_preview_size"></div><div><p>SVGF        </p></div></div>
+            </div>
+        
+        </center>
+    </body>
+</html>
